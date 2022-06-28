@@ -3,28 +3,24 @@
 // SPDX-License-Identifier: MIT
 
 /*
-Dalek voice effect using Wave Shield.  This is based on the adavoice sketch
-with a lot of code & comments ripped out, so see that code for more insight,
-parts list, etc.  This sketch doesn't do any pitch bending, just the Dalek
-modulation...you'll need to perform your own monotone & British accent. :)
+The reason for the fork is to add code led dome lights. Both lights could probably be powered from a single pin 
+but this is being used in a prop I don't have physical access to so after sending away the hardware the user has 
+a better chance of maintining it if the wiring appears simpiler.
 
-This should still let you play sounds off the SD card (voice effect stops
-during playback), haven't tested, but worked in prior code this came from.
+Dalek voice effect using Wave Shield.  This is based on the adavoice sketch and
+doesn't do any pitch bending, just the Dalek voice modulation...you'll need to perform your own monotone & British accent. :)
 
-Written by Adafruit industries, with portions adapted from the
-'PiSpeakHC' sketch included with WaveHC library.
+ 
 */
 
-#include <WaveHC.h>
-#include <WaveUtil.h>
-
-SdReader  card;
-FatVolume vol;
-FatReader root;
-FatReader file;
-WaveHC    wave;
 
 #define ADC_CHANNEL 0 // Microphone on Analog pin 0
+
+// LED pins
+const int led1Pin =  13; // the number of the LED 1 pin
+const int led2Pin =  12; // the number of the LED 2 pin
+
+int ledState = LOW; // ledState used to set the LED
 
 // Wave shield DAC: digital pins 2, 3, 4, 5
 #define DAC_CS_PORT    PORTD
@@ -38,23 +34,7 @@ WaveHC    wave;
 
 uint8_t adc_save;
 
-// Keypad information:
-uint8_t
-  rows[] = { A2, A3, A4, A5 }, // Keypad rows connect to these pins
-  cols[] = { 6, 7, 8 },        // Keypad columns connect to these pins
-  r      = 0,                  // Current row being examined
-  prev   = 255,                // Previous key reading (or 255 if none)
-  count  = 0;                  // Counter for button debouncing
-#define DEBOUNCE 10            // Number of iterations before button 'takes'
 
-// Keypad/WAV information.  Number of elements here should match the
-// number of keypad rows times the number of columns, plus one:
-const char *sound[] = {
-  "breath" , "destroy", "saber"   , // Row 1 = Darth Vader sounds
-  "zilla"  , "crunch" , "burp"    , // Row 2 = Godzilla sounds
-  "hithere", "smell"  , "squirrel", // Row 3 = Dug the dog sounds
-  "carhorn", "foghorn", "door"    , // Row 4 = Cartoon/SFX sound
-  "startup" };                      // Extra item = boot sound
 
 
 //////////////////////////////////// SETUP
@@ -62,23 +42,17 @@ const char *sound[] = {
 void setup() {
   uint8_t i;
 
-  Serial.begin(9600);           
+  Serial.begin(9600);    
 
+           
+  pinMode(led1Pin, OUTPUT); // set the digital pin 1 as led output
+  pinMode(led2Pin, OUTPUT); // set the digital pin 2 as led output
   pinMode(2, OUTPUT);    // Chip select
   pinMode(3, OUTPUT);    // Serial clock
   pinMode(4, OUTPUT);    // Serial data
   pinMode(5, OUTPUT);    // Latch
   digitalWrite(2, HIGH); // Set chip select high
 
-  if(!card.init())             Serial.print(F("Card init. failed!"));
-  else if(!vol.init(card))     Serial.print(F("No partition!"));
-  else if(!root.openRoot(vol)) Serial.print(F("Couldn't open dir"));
-  else {
-    Serial.println(F("Files found:"));
-    root.ls();
-    // Play startup sound (last file in array).
-    playfile(sizeof(sound) / sizeof(sound[0]) - 1);
-  }
 
   // Optional, but may make sampling and playback a little smoother:
   // Disable Timer0 interrupt.  This means delay(), millis() etc. won't
@@ -89,85 +63,15 @@ void setup() {
   analogReference(EXTERNAL); // 3.3V to AREF
   adc_save = ADCSRA;         // Save ADC setting for restore later
 
-  // Set keypad rows to outputs, set to HIGH logic level:
-  for(i=0; i<sizeof(rows); i++) {
-    pinMode(rows[i], OUTPUT);
-    digitalWrite(rows[i], HIGH);
-  }
-  // Set keypad columns to inputs, enable pull-up resistors:
-  for(i=0; i<sizeof(cols); i++) {
-    pinMode(cols[i], INPUT);
-    digitalWrite(cols[i], HIGH);
-  }
-
-  while(wave.isplaying); // Wait for startup sound to finish...
   startDalek();          // and start the Dalek effect
 }
 
 
 //////////////////////////////////// LOOP
 
-// As written here, the loop function scans a keypad to triggers sounds
-// (stopping and restarting the voice effect as needed).  If all you need
-// is a couple of buttons, it may be easier to tear this out and start
-// over with some simple digitalRead() calls.
-
-void loop() {
-
-  uint8_t c, button;
-
-  // Set current row to LOW logic state...
-  digitalWrite(rows[r], LOW);
-  // ...then examine column buttons for a match...
-  for(c=0; c<sizeof(cols); c++) {
-    if(digitalRead(cols[c]) == LOW) { // First match.
-      button = r * sizeof(cols) + c;  // Get button index.
-      if(button == prev) {            // Same button as before?
-        if(++count >= DEBOUNCE) {     // Yes.  Held beyond debounce threshold?
-          if(wave.isplaying) wave.stop();      // Stop current WAV (if any)
-          else               stopDalek();      // or stop voice effect
-          playfile(button);                    // and play new sound.
-          while(digitalRead(cols[c]) == LOW);  // Wait for button release.
-          prev  = 255;                // Reset debounce values.
-          count = 0;
-        }
-      } else {                        // Not same button as prior pass.
-        prev  = button;               // Record new button and
-        count = 0;                    // restart debounce counter.
-      }
-    }
-  }
-
-  // Restore current row to HIGH logic state and advance row counter...
-  digitalWrite(rows[r], HIGH);
-  if(++r >= sizeof(rows)) { // If last row scanned...
-    r = 0;                  // Reset row counter
-    // If no new sounds have been triggered at this point, restart Dalek...
-    if(!wave.isplaying) startDalek();
-  }
-}
 
 
-//////////////////////////////////// HELPERS
-
-// Open and start playing a WAV file
-void playfile(int idx) {
-  char filename[13];
-
-  (void)sprintf(filename,"%s.wav", sound[idx]);
-  Serial.print("File: ");
-  Serial.println(filename);
-
-  if(!file.open(root, filename)) {
-    Serial.print(F("Couldn't open file "));
-    Serial.print(filename);
-    return;
-  }
-  if(!wave.create(file)) {
-    Serial.println(F("Not a valid WAV"));
-    return;
-  }
-  wave.play();
+void loop() {  
 }
 
 
@@ -249,6 +153,7 @@ ISR(ADC_vect, ISR_BLOCK) { // ADC conversion complete
   int32_t  v; // Voice in
   uint16_t r; // Ring in
   uint32_t o; // Output
+  
 
   lo = ADCL;
   hi = ADCH;
@@ -259,6 +164,17 @@ ISR(ADC_vect, ISR_BLOCK) { // ADC conversion complete
   o = v * r + 131072;                              // 0-261888 (18-bit)
   hi = (o >> 14);                                  // Scale 18- to 12-bit
   lo = (o >> 16) | (o >> 6);
+
+    // Change the state of the leds based on voice.
+    if (v > 450) {
+      ledState = HIGH;
+    } else {
+      ledState = LOW;
+    }
+
+    // set the LEDs state.
+    digitalWrite(led1Pin, ledState);
+    digitalWrite(led2Pin, ledState);
 
   if(++ringPos >= sizeof(ring)) ringPos = 0; // Cycle through table
 
@@ -282,4 +198,3 @@ ISR(ADC_vect, ISR_BLOCK) { // ADC conversion complete
   }
   DAC_CS_PORT    |=  _BV(DAC_CS);
 }
-
